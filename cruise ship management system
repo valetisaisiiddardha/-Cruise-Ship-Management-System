@@ -1,0 +1,557 @@
+# cruise_ship_management.py
+import sqlite3
+import json
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional, Tuple
+import random
+from enum import Enum
+
+class CabinType(Enum):
+    INSIDE = "Inside"
+    OCEANVIEW = "Ocean View"
+    BALCONY = "Balcony"
+    SUITE = "Suite"
+
+class CruiseShipManagement:
+    def __init__(self, db_name: str = "cruise_ship.db"):
+        self.conn = sqlite3.connect(db_name)
+        self.cursor = self.conn.cursor()
+        self.create_tables()
+        self.initialize_data()
+    
+    def create_tables(self):
+        """Create database tables for cruise ship management"""
+        tables = [
+            '''CREATE TABLE IF NOT EXISTS ships (
+                ship_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ship_name TEXT NOT NULL UNIQUE,
+                cruise_line TEXT,
+                year_built INTEGER,
+                capacity INTEGER,
+                crew_count INTEGER,
+                length REAL,
+                beam REAL,
+                speed REAL,
+                status TEXT DEFAULT 'Active'
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS cabins (
+                cabin_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ship_id INTEGER,
+                cabin_number TEXT NOT NULL,
+                deck_number INTEGER,
+                cabin_type TEXT,
+                max_occupancy INTEGER,
+                square_feet REAL,
+                has_balcony INTEGER DEFAULT 0,
+                has_window INTEGER DEFAULT 0,
+                price_per_night REAL,
+                status TEXT DEFAULT 'Available',
+                UNIQUE(ship_id, cabin_number),
+                FOREIGN KEY (ship_id) REFERENCES ships(ship_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS cruises (
+                cruise_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ship_id INTEGER,
+                cruise_name TEXT NOT NULL,
+                departure_port TEXT,
+                destination TEXT,
+                departure_date DATE,
+                return_date DATE,
+                duration_days INTEGER,
+                base_price REAL,
+                current_passengers INTEGER DEFAULT 0,
+                max_passengers INTEGER,
+                status TEXT DEFAULT 'Scheduled',
+                FOREIGN KEY (ship_id) REFERENCES ships(ship_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS passengers (
+                passenger_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                date_of_birth DATE,
+                nationality TEXT,
+                passport_number TEXT UNIQUE,
+                email TEXT UNIQUE,
+                phone TEXT,
+                emergency_contact TEXT,
+                dietary_restrictions TEXT,
+                medical_notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS bookings (
+                booking_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cruise_id INTEGER,
+                passenger_id INTEGER,
+                cabin_id INTEGER,
+                booking_date DATE DEFAULT CURRENT_DATE,
+                number_of_guests INTEGER DEFAULT 1,
+                total_price REAL,
+                deposit_paid REAL DEFAULT 0.0,
+                payment_status TEXT DEFAULT 'Pending',
+                special_requests TEXT,
+                booking_status TEXT DEFAULT 'Confirmed',
+                FOREIGN KEY (cruise_id) REFERENCES cruises(cruise_id),
+                FOREIGN KEY (passenger_id) REFERENCES passengers(passenger_id),
+                FOREIGN KEY (cabin_id) REFERENCES cabins(cabin_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS crew (
+                crew_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ship_id INTEGER,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                position TEXT,
+                department TEXT,
+                nationality TEXT,
+                contract_start DATE,
+                contract_end DATE,
+                salary REAL,
+                emergency_contact TEXT,
+                certifications TEXT,
+                status TEXT DEFAULT 'Active',
+                FOREIGN KEY (ship_id) REFERENCES ships(ship_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS itinerary (
+                itinerary_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cruise_id INTEGER,
+                day_number INTEGER,
+                port_of_call TEXT,
+                arrival_time TIME,
+                departure_time TIME,
+                activities TEXT,
+                FOREIGN KEY (cruise_id) REFERENCES cruises(cruise_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS dining_reservations (
+                reservation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                booking_id INTEGER,
+                restaurant_name TEXT,
+                reservation_date DATE,
+                reservation_time TIME,
+                number_of_guests INTEGER,
+                table_number TEXT,
+                special_requests TEXT,
+                FOREIGN KEY (booking_id) REFERENCES bookings(booking_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS excursions (
+                excursion_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cruise_id INTEGER,
+                port_name TEXT,
+                excursion_name TEXT NOT NULL,
+                description TEXT,
+                duration_hours REAL,
+                price_per_person REAL,
+                max_capacity INTEGER,
+                current_bookings INTEGER DEFAULT 0,
+                meeting_point TEXT,
+                FOREIGN KEY (cruise_id) REFERENCES cruises(cruise_id)
+            )''',
+            
+            '''CREATE TABLE IF NOT EXISTS excursion_bookings (
+                booking_id INTEGER,
+                excursion_id INTEGER,
+                passenger_id INTEGER,
+                number_of_people INTEGER,
+                total_price REAL,
+                booking_status TEXT DEFAULT 'Confirmed',
+                PRIMARY KEY (booking_id, excursion_id, passenger_id),
+                FOREIGN KEY (booking_id) REFERENCES bookings(booking_id),
+                FOREIGN KEY (excursion_id) REFERENCES excursions(excursion_id),
+                FOREIGN KEY (passenger_id) REFERENCES passengers(passenger_id)
+            )'''
+        ]
+        
+        for table in tables:
+            self.cursor.execute(table)
+        self.conn.commit()
+    
+    def initialize_data(self):
+        """Initialize sample data"""
+        # Check if ships exist
+        self.cursor.execute("SELECT COUNT(*) FROM ships")
+        if self.cursor.fetchone()[0] == 0:
+            self.initialize_sample_ships()
+    
+    def initialize_sample_ships(self):
+        """Add sample ships to the database"""
+        ships = [
+            ('Ocean Majesty', 'Royal Caribbean', 2019, 5000, 1500, 1187.0, 215.0, 22.5),
+            ('Pacific Dream', 'Carnival', 2018, 4200, 1450, 1092.0, 203.0, 21.0),
+            ('Mediterranean Star', 'MSC', 2020, 6500, 2100, 1354.0, 246.0, 23.8)
+        ]
+        
+        for ship in ships:
+            self.cursor.execute('''INSERT INTO ships 
+                                   (ship_name, cruise_line, year_built, capacity, 
+                                    crew_count, length, beam, speed)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', ship)
+        self.conn.commit()
+    
+    def add_cruise(self, ship_id: int, cruise_name: str, departure_port: str,
+                  destination: str, departure_date: str, return_date: str,
+                  base_price: float) -> int:
+        """Add a new cruise itinerary"""
+        # Calculate duration
+        dep_date = datetime.strptime(departure_date, '%Y-%m-%d')
+        ret_date = datetime.strptime(return_date, '%Y-%m-%d')
+        duration = (ret_date - dep_date).days
+        
+        # Get ship capacity
+        self.cursor.execute('''SELECT capacity FROM ships WHERE ship_id = ?''', (ship_id,))
+        capacity = self.cursor.fetchone()[0]
+        
+        query = '''INSERT INTO cruises 
+                   (ship_id, cruise_name, departure_port, destination,
+                    departure_date, return_date, duration_days, base_price, max_passengers)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+        self.cursor.execute(query, (ship_id, cruise_name, departure_port, destination,
+                                  departure_date, return_date, duration, base_price, capacity))
+        self.conn.commit()
+        
+        cruise_id = self.cursor.lastrowid
+        
+        # Create cabins for this cruise
+        self.generate_cabins_for_cruise(ship_id, cruise_id)
+        
+        return cruise_id
+    
+    def generate_cabins_for_cruise(self, ship_id: int, cruise_id: int):
+        """Generate cabins for a specific cruise"""
+        cabin_types = [
+            (CabinType.INSIDE.value, 2, 185, 150.00),
+            (CabinType.OCEANVIEW.value, 2, 220, 250.00),
+            (CabinType.BALCONY.value, 4, 320, 400.00),
+            (CabinType.SUITE.value, 6, 550, 800.00)
+        ]
+        
+        decks = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        
+        cabin_number = 100
+        for deck in decks:
+            for i in range(20):  # 20 cabins per deck
+                cabin_type, max_occ, sqft, price = random.choice(cabin_types)
+                cabin_num = f"{deck}{cabin_number:02d}"
+                
+                query = '''INSERT INTO cabins 
+                           (ship_id, cabin_number, deck_number, cabin_type,
+                            max_occupancy, square_feet, price_per_night)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)'''
+                self.cursor.execute(query, (ship_id, cabin_num, deck, cabin_type,
+                                          max_occ, sqft, price))
+                cabin_number += 1
+        
+        self.conn.commit()
+    
+    def book_cruise(self, cruise_id: int, passenger_id: int, 
+                   number_of_guests: int = 1, cabin_type: str = None) -> int:
+        """Book a cruise for a passenger"""
+        # Check cruise availability
+        self.cursor.execute('''SELECT current_passengers, max_passengers, base_price
+                               FROM cruises WHERE cruise_id = ?''', (cruise_id,))
+        cruise_info = self.cursor.fetchone()
+        
+        if not cruise_info:
+            raise ValueError("Cruise not found")
+        
+        current_passengers, max_passengers, base_price = cruise_info
+        
+        if current_passengers + number_of_guests > max_passengers:
+            raise ValueError("Cruise is fully booked")
+        
+        # Find available cabin
+        cabin_query = '''SELECT cabin_id, price_per_night FROM cabins 
+                         WHERE ship_id = (SELECT ship_id FROM cruises WHERE cruise_id = ?)
+                         AND cabin_type LIKE ? 
+                         AND status = 'Available'
+                         AND max_occupancy >= ?
+                         LIMIT 1'''
+        
+        cabin_type_pattern = f"%{cabin_type}%" if cabin_type else "%"
+        self.cursor.execute(cabin_query, (cruise_id, cabin_type_pattern, number_of_guests))
+        cabin = self.cursor.fetchone()
+        
+        if not cabin:
+            raise ValueError("No suitable cabins available")
+        
+        cabin_id, price_per_night = cabin
+        
+        # Calculate total price
+        cruise_duration = self.get_cruise_duration(cruise_id)
+        total_price = (price_per_night * cruise_duration * number_of_guests) + (base_price * number_of_guests)
+        
+        # Create booking
+        booking_query = '''INSERT INTO bookings 
+                           (cruise_id, passenger_id, cabin_id, number_of_guests, total_price)
+                           VALUES (?, ?, ?, ?, ?)'''
+        self.cursor.execute(booking_query, (cruise_id, passenger_id, cabin_id, 
+                                          number_of_guests, total_price))
+        booking_id = self.cursor.lastrowid
+        
+        # Update cabin status
+        self.cursor.execute('''UPDATE cabins SET status = 'Occupied' WHERE cabin_id = ?''', (cabin_id,))
+        
+        # Update cruise passenger count
+        self.cursor.execute('''UPDATE cruises 
+                               SET current_passengers = current_passengers + ?
+                               WHERE cruise_id = ?''', (number_of_guests, cruise_id))
+        
+        self.conn.commit()
+        return booking_id
+    
+    def get_cruise_duration(self, cruise_id: int) -> int:
+        """Get duration of a cruise in days"""
+        self.cursor.execute('''SELECT duration_days FROM cruises WHERE cruise_id = ?''', (cruise_id,))
+        result = self.cursor.fetchone()
+        return result[0] if result else 0
+    
+    def add_passenger(self, first_name: str, last_name: str, date_of_birth: str,
+                     nationality: str, passport_number: str, email: str,
+                     phone: str = "", emergency_contact: str = "") -> int:
+        """Add a new passenger to the system"""
+        query = '''INSERT INTO passengers 
+                   (first_name, last_name, date_of_birth, nationality,
+                    passport_number, email, phone, emergency_contact)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)'''
+        self.cursor.execute(query, (first_name, last_name, date_of_birth,
+                                  nationality, passport_number, email, phone, emergency_contact))
+        self.conn.commit()
+        return self.cursor.lastrowid
+    
+    def add_itinerary_day(self, cruise_id: int, day_number: int, port_of_call: str,
+                         arrival_time: str, departure_time: str, activities: str):
+        """Add a day to the cruise itinerary"""
+        query = '''INSERT INTO itinerary 
+                   (cruise_id, day_number, port_of_call, arrival_time, 
+                    departure_time, activities)
+                   VALUES (?, ?, ?, ?, ?, ?)'''
+        self.cursor.execute(query, (cruise_id, day_number, port_of_call,
+                                  arrival_time, departure_time, activities))
+        self.conn.commit()
+    
+    def add_excursion(self, cruise_id: int, port_name: str, excursion_name: str,
+                     description: str, duration_hours: float, price_per_person: float,
+                     max_capacity: int, meeting_point: str = "Main Deck"):
+        """Add a shore excursion"""
+        query = '''INSERT INTO excursions 
+                   (cruise_id, port_name, excursion_name, description,
+                    duration_hours, price_per_person, max_capacity, meeting_point)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)'''
+        self.cursor.execute(query, (cruise_id, port_name, excursion_name, description,
+                                  duration_hours, price_per_person, max_capacity, meeting_point))
+        self.conn.commit()
+    
+    def book_excursion(self, booking_id: int, excursion_id: int, passenger_id: int,
+                      number_of_people: int = 1) -> float:
+        """Book a shore excursion"""
+        # Check excursion availability
+        self.cursor.execute('''SELECT current_bookings, max_capacity, price_per_person
+                               FROM excursions WHERE excursion_id = ?''', (excursion_id,))
+        excursion_info = self.cursor.fetchone()
+        
+        if not excursion_info:
+            raise ValueError("Excursion not found")
+        
+        current_bookings, max_capacity, price_per_person = excursion_info
+        
+        if current_bookings + number_of_people > max_capacity:
+            raise ValueError("Excursion is fully booked")
+        
+        total_price = price_per_person * number_of_people
+        
+        # Create excursion booking
+        query = '''INSERT INTO excursion_bookings 
+                   (booking_id, excursion_id, passenger_id, number_of_people, total_price)
+                   VALUES (?, ?, ?, ?, ?)'''
+        self.cursor.execute(query, (booking_id, excursion_id, passenger_id, 
+                                  number_of_people, total_price))
+        
+        # Update excursion booking count
+        self.cursor.execute('''UPDATE excursions 
+                               SET current_bookings = current_bookings + ?
+                               WHERE excursion_id = ?''', (number_of_people, excursion_id))
+        
+        self.conn.commit()
+        return total_price
+    
+    def make_dining_reservation(self, booking_id: int, restaurant_name: str,
+                               reservation_date: str, reservation_time: str,
+                               number_of_guests: int, special_requests: str = ""):
+        """Make a dining reservation"""
+        query = '''INSERT INTO dining_reservations 
+                   (booking_id, restaurant_name, reservation_date, reservation_time,
+                    number_of_guests, special_requests)
+                   VALUES (?, ?, ?, ?, ?, ?)'''
+        self.cursor.execute(query, (booking_id, restaurant_name, reservation_date,
+                                  reservation_time, number_of_guests, special_requests))
+        self.conn.commit()
+    
+    def get_cruise_manifest(self, cruise_id: int) -> List[Dict]:
+        """Get complete passenger manifest for a cruise"""
+        query = '''SELECT p.passenger_id, p.first_name, p.last_name, 
+                          p.nationality, p.passport_number,
+                          b.booking_id, b.cabin_id, b.number_of_guests,
+                          c.cabin_number, c.cabin_type, c.deck_number,
+                          b.booking_status, b.payment_status
+                   FROM passengers p
+                   JOIN bookings b ON p.passenger_id = b.passenger_id
+                   JOIN cabins c ON b.cabin_id = c.cabin_id
+                   WHERE b.cruise_id = ?
+                   ORDER BY c.deck_number, c.cabin_number'''
+        self.cursor.execute(query, (cruise_id,))
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+    
+    def get_cruise_revenue_report(self, cruise_id: int) -> Dict:
+        """Generate revenue report for a cruise"""
+        # Booking revenue
+        query_bookings = '''SELECT COALESCE(SUM(total_price), 0) as total_bookings,
+                                   COALESCE(SUM(deposit_paid), 0) as deposits_received,
+                                   COUNT(*) as total_bookings_count
+                            FROM bookings 
+                            WHERE cruise_id = ?'''
+        self.cursor.execute(query_bookings, (cruise_id,))
+        bookings_revenue = dict(zip([desc[0] for desc in self.cursor.description], 
+                                   self.cursor.fetchone()))
+        
+        # Excursion revenue
+        query_excursions = '''SELECT COALESCE(SUM(eb.total_price), 0) as total_excursions
+                              FROM excursion_bookings eb
+                              JOIN bookings b ON eb.booking_id = b.booking_id
+                              WHERE b.cruise_id = ?'''
+        self.cursor.execute(query_excursions, (cruise_id,))
+        excursions_revenue = self.cursor.fetchone()[0] or 0
+        
+        total_revenue = bookings_revenue['total_bookings'] + excursions_revenue
+        
+        return {
+            'cruise_id': cruise_id,
+            'bookings_revenue': bookings_revenue,
+            'excursions_revenue': excursions_revenue,
+            'total_revenue': total_revenue,
+            'deposits_received': bookings_revenue['deposits_received'],
+            'outstanding_balance': total_revenue - bookings_revenue['deposits_received']
+        }
+    
+    def get_available_cabins(self, cruise_id: int, cabin_type: str = None) -> List[Dict]:
+        """Get available cabins for a specific cruise"""
+        query = '''SELECT c.*, s.ship_name
+                   FROM cabins c
+                   JOIN ships s ON c.ship_id = s.ship_id
+                   WHERE c.ship_id = (SELECT ship_id FROM cruises WHERE cruise_id = ?)
+                   AND c.status = 'Available' '''
+        
+        params = [cruise_id]
+        if cabin_type:
+            query += " AND c.cabin_type = ?"
+            params.append(cabin_type)
+        
+        query += " ORDER BY c.deck_number, c.cabin_number"
+        
+        self.cursor.execute(query, tuple(params))
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+    
+    def cancel_booking(self, booking_id: int, refund_percentage: float = 0.8):
+        """Cancel a booking with refund"""
+        # Get booking details
+        self.cursor.execute('''SELECT cruise_id, cabin_id, number_of_guests, total_price
+                               FROM bookings WHERE booking_id = ?''', (booking_id,))
+        booking_info = self.cursor.fetchone()
+        
+        if not booking_info:
+            raise ValueError("Booking not found")
+        
+        cruise_id, cabin_id, number_of_guests, total_price = booking_info
+        
+        # Update booking status
+        self.cursor.execute('''UPDATE bookings 
+                               SET booking_status = 'Cancelled',
+                                   payment_status = 'Refunded'
+                               WHERE booking_id = ?''', (booking_id,))
+        
+        # Free up cabin
+        self.cursor.execute('''UPDATE cabins SET status = 'Available' WHERE cabin_id = ?''', (cabin_id,))
+        
+        # Update cruise passenger count
+        self.cursor.execute('''UPDATE cruises 
+                               SET current_passengers = current_passengers - ?
+                               WHERE cruise_id = ?''', (number_of_guests, cruise_id))
+        
+        self.conn.commit()
+        
+        refund_amount = total_price * refund_percentage
+        return refund_amount
+    
+    def close(self):
+        """Close database connection"""
+        self.conn.close()
+
+
+# Web-based interface using Flask
+from flask import Flask, render_template, request, jsonify, session
+
+app = Flask(__name__)
+app.secret_key = 'cruise_ship_secret_key'
+cruise_system = CruiseShipManagement()
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/api/cruises')
+def get_cruises():
+    cursor = cruise_system.conn.cursor()
+    cursor.execute('''SELECT c.*, s.ship_name 
+                      FROM cruises c 
+                      JOIN ships s ON c.ship_id = s.ship_id
+                      WHERE c.status = 'Scheduled' 
+                      ORDER BY c.departure_date''')
+    cruises = cursor.fetchall()
+    return jsonify([dict(zip([column[0] for column in cursor.description], row)) 
+                    for row in cruises])
+
+@app.route('/api/book', methods=['POST'])
+def book_cruise():
+    data = request.json
+    try:
+        booking_id = cruise_system.book_cruise(
+            cruise_id=data['cruise_id'],
+            passenger_id=data['passenger_id'],
+            number_of_guests=data.get('number_of_guests', 1),
+            cabin_type=data.get('cabin_type')
+        )
+        return jsonify({'success': True, 'booking_id': booking_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/cabins/<int:cruise_id>')
+def get_cabins(cruise_id):
+    cabin_type = request.args.get('type')
+    cabins = cruise_system.get_available_cabins(cruise_id, cabin_type)
+    return jsonify(cabins)
+
+if __name__ == "__main__":
+    # For command line testing
+    system = CruiseShipManagement()
+    
+    # Example usage
+    cruise_id = system.add_cruise(
+        ship_id=1,
+        cruise_name="Caribbean Adventure",
+        departure_port="Miami, FL",
+        destination="Caribbean Islands",
+        departure_date="2024-06-15",
+        return_date="2024-06-22",
+        base_price=500.00
+    )
+    
+    print(f"Cruise created with ID: {cruise_id}")
+    
+    # For web application
+    # app.run(debug=True)
